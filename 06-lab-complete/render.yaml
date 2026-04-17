@@ -66,7 +66,7 @@ services:
     region: oregon
     autoDeployTrigger: commit
     healthCheckPath: /ready
-    maxShutdownDelaySeconds: 30
+    # maxShutdownDelaySeconds: 30
     envVars:
       - fromGroup: agentic-job-hunter-shared
       - key: PORT
