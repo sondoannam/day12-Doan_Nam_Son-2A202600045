@@ -61,7 +61,7 @@ services:
     name: agentic-job-hunter-web
     runtime: docker
     dockerfilePath: 06-lab-complete/Dockerfile
-    dockerContext: .
+    dockerContext: 06-lab-complete
     plan: free
     region: oregon
     autoDeployTrigger: commit

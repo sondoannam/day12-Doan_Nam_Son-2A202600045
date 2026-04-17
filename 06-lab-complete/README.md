@@ -174,6 +174,7 @@ curl -X POST http://localhost/ask \
 - The local Docker Compose stack includes `nginx + app replicas + redis`.
 - Render Free cannot run that same topology because private services are not available on Free, free web services cannot receive private-network traffic, and free web services cannot scale beyond one instance.
 - For assignment deployment on Render Free, use the included `render.yaml` fallback: one public FastAPI web service plus one free Render Key Value instance.
+- In the included blueprint, `dockerContext` must point to `06-lab-complete` because Render resolves Docker paths from the repository root, while this lab lives in a subdirectory.
 
 ## Troubleshooting
 
