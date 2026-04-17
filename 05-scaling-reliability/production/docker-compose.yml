@@ -18,7 +18,7 @@ services:
   agent:
     build:
       context: ../..
-      dockerfile: 05-scaling-reliability/advanced/Dockerfile
+      dockerfile: 05-scaling-reliability/production/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
       - ENVIRONMENT=demo

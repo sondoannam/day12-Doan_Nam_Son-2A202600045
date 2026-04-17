@@ -15,6 +15,22 @@ from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
+import redis
+from datetime import datetime
+
+r = redis.Redis()
+
+def check_budget(user_id: str, estimated_cost: float) -> bool:
+    month_key = datetime.now().strftime("%Y-%m")
+    key = f"budget:{user_id}:{month_key}"
+    
+    current = float(r.get(key) or 0)
+    if current + estimated_cost > 10:
+        return False
+    
+    r.incrbyfloat(key, estimated_cost)
+    r.expire(key, 32 * 24 * 3600)  # 32 days
+    return True
 
 # Giá token (tham khảo, thay đổi theo model)
 PRICE_PER_1K_INPUT_TOKENS = 0.00015   # GPT-4o-mini: $0.15/1M input

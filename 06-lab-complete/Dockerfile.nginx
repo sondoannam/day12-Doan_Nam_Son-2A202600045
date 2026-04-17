@@ -1,0 +1,10 @@
+FROM nginx:1.27-alpine
+
+COPY nginx.render.conf.template /etc/nginx/templates/default.conf.template
+COPY scripts/render-nginx-start.sh /opt/render/nginx/start.sh
+
+RUN chmod +x /opt/render/nginx/start.sh
+
+EXPOSE 10000
+
+CMD ["/opt/render/nginx/start.sh"]

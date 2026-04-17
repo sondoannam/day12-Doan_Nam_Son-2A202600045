@@ -1,33 +1,85 @@
-version: "3.9"
-
 services:
-  agent:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - ENVIRONMENT=staging
-      - APP_NAME=Production AI Agent
-      - REDIS_URL=redis://redis:6379/0
-    env_file:
-      - .env.local
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
     depends_on:
       redis:
         condition: service_healthy
+    environment:
+      APP_NAME: ${APP_NAME:-Agentic Job Hunter}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PORT: ${PORT:-8000}
+      AGENT_API_KEY: ${AGENT_API_KEY:-replace-with-a-shared-api-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-replace-with-openai-api-key}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-replace-with-gemini-api-key}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      MODEL_TEMPERATURE: ${MODEL_TEMPERATURE:-0.2}
+      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-30}
+      GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-30}
+      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-800}
+      GEMINI_MAX_OUTPUT_TOKENS: ${GEMINI_MAX_OUTPUT_TOKENS:-800}
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-10}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      MONTHLY_BUDGET_USD: ${MONTHLY_BUDGET_USD:-10.00}
+      REQUEST_RESERVE_USD: ${REQUEST_RESERVE_USD:-0.25}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      HISTORY_MAX_MESSAGES: ${HISTORY_MAX_MESSAGES:-20}
+      GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: ${GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS:-20}
+      OPENAI_INPUT_PRICE_PER_1K_USD: ${OPENAI_INPUT_PRICE_PER_1K_USD:-0.00015}
+      OPENAI_OUTPUT_PRICE_PER_1K_USD: ${OPENAI_OUTPUT_PRICE_PER_1K_USD:-0.00060}
+      GEMINI_INPUT_PRICE_PER_1K_USD: ${GEMINI_INPUT_PRICE_PER_1K_USD:-0.00010}
+      GEMINI_OUTPUT_PRICE_PER_1K_USD: ${GEMINI_OUTPUT_PRICE_PER_1K_USD:-0.00040}
+    expose:
+      - "${PORT:-8000}"
     healthcheck:
-      test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
+    stop_grace_period: 30s
 
   redis:
     image: redis:7-alpine
-    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      interval: 5s
       timeout: 3s
-      retries: 3
+      retries: 10
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  redis_data:

@@ -35,19 +35,180 @@
 
 ## Part 3: Cloud Deployment
 
-### Exercise 3.1: Railway deployment
-- URL: https://your-app.railway.app
-- Screenshot: [Link to screenshot in repo]
+### Exercise 3.2: Render deployment
+- URL: https://ai-agent-bgwm.onrender.com/
+- Screenshot: ![render-deployment](screenshots/render-deployment.png)
 
 ## Part 4: API Security
 
 ### Exercise 4.1-4.3: Test results
-[Paste your test outputs]
+
+```bash
+#  Không có key
+curl http://localhost:8000/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Hello"}'
+Result: {"detail":"Missing API key. Include header: X-API-Key: <your-key>"}
+
+#  Có key
+curl http://localhost:8000/ask -X POST \
+  -H "X-API-Key: demo-key-change-in-production" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Hello"}'
+Result: {
+    "question": "Hello",
+    "answer": "Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé."
+}
+
+# JWT authentication 
+TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZWFjaGVyIiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzc2NDIzODEzLCJleHAiOjE3NzY0Mjc0MTN9.9ZC95TVva6f9NLvGNQwHuJsaqp2iQlg-999k6W3hPwY"
+curl http://localhost:8000/ask -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Explain JWT"}'
+result: {
+    "question": "Explain JWT",
+    "answer": "Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận.",
+    "usage": {
+        "requests_remaining": 99,
+        "budget_remaining_usd": 1.9e-05
+    }
+}
+
+# Rate limiting
+for i in {1..20}; do
+  curl http://localhost:8000/ask -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"question": "Test '$i'"}'
+  echo ""
+done
+result: {"detail":{"error":"Rate limit exceeded","limit":100,"window_seconds":60,"retry_after_seconds":12}}
+
+```
 
 ### Exercise 4.4: Cost guard implementation
-[Explain your approach]
+Cách tiếp cận (Approach) để bảo vệ chi phí API (Cost Guard) được chia làm 2 pha rõ rệt: Tiền kiểm và Hậu kiểm.
+
+1. **Định giá (Pricing & Tracking):** Hệ thống không đếm số lượng request một cách mù quáng, mà tính toán chi phí (USD) dựa trên số token đầu vào (input) và đầu ra (output) thực tế theo bảng giá của model LLM (VD: GPT-4o-mini).
+2. **Tiền kiểm (`check_budget`):** Trước khi cho phép user gọi LLM, hệ thống sẽ kiểm tra xem chi phí tích lũy trong kỳ của user đó đã vượt ngân sách chưa. Nếu vượt, lập tức chặn đứng và ném ra lỗi HTTP 402 (Payment Required). Đồng thời, hệ thống cũng có một Global Budget để chặn toàn bộ traffic (HTTP 503) nếu tổng chi phí cả hệ thống vượt ngưỡng, tránh rủi ro phá sản.
+3. **Hậu kiểm và Ghi nhận (`record_usage`):** Sau khi nhận response từ LLM, hệ thống tính toán chính xác số token đã tiêu thụ, quy đổi ra tiền và cộng dồn vào tổng chi của user trong ngày.
 
 ## Part 5: Scaling & Reliability
 
 ### Exercise 5.1-5.5: Implementation notes
-[Your explanations and test results]
+
+**1. Health Checks & Graceful Shutdown (Ex 5.1 & 5.2):**
+- Đã sử dụng endpoint `/health` để hệ thống theo dõi liveness và `/ready` cho readiness. 
+- Graceful shutdown được thiết lập thông qua việc bắt tín hiệu `SIGTERM`, cho phép uvicorn hoàn thành các in-flight requests trước khi tắt hẳn.
+- **Test Output:**
+```bash
+curl http://localhost:8000/health
+result: 200 OK
+
+curl http://localhost:8000/ready
+result: 200 OK
+
+curl http://localhost:8000/ask -X POST -H "Content-Type: application/json" -d '{"question": "Long task"}' & sleep 1; kill -TERM 59709
+result:
+127.0.0.1:52074 - "POST /ask HTTP/1.1" 422 Unprocessable Entity
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-04-17 17:21:56,344 INFO 🔄 Graceful shutdown initiated...
+2026-04-17 17:21:56,344 INFO ✅ Shutdown complete
+INFO:     Application shutdown complete.
+INFO:     Finished server process [59709]
+2026-04-17 17:21:56,344 INFO Received signal 15 — uvicorn will handle graceful shutdown
+```
+
+**2. Stateless Design (Ex 5.3):**
+- Để có thể scale ra nhiều instances mà không làm mất context (lịch sử chat) của user, trạng thái ứng dụng (state) đã được tách rời khỏi bộ nhớ (in-memory) và chuyển sang lưu trữ tập trung tại Redis.
+
+**3. Load Balancing (Ex 5.4):**
+- Nginx được sử dụng làm Load Balancer để phân phối đều traffic (round-robin) đến các instances của agent.
+- **Test Output:**
+```bash
+for i in {1..10}; do     
+  curl http://localhost:8080/chat -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"question": "Request '$i'"}'
+done
+result:
+agent-1  | INFO:     172.18.0.6:40764 - "POST /chat HTTP/1.1" 200 OK
+agent-1  | INFO:     172.18.0.6:40764 - "POST /chat HTTP/1.1" 200 OK
+agent-1  | INFO:     172.18.0.6:40764 - "POST /chat HTTP/1.1" 200 OK
+agent-1  | INFO:     172.18.0.6:40764 - "POST /chat HTTP/1.1" 200 OK
+agent-2  | INFO:     172.18.0.6:54392 - "POST /ask HTTP/1.1" 404 Not Found
+agent-2  | INFO:     127.0.0.1:45836 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     172.18.0.6:40906 - "POST /chat HTTP/1.1" 200 OK
+agent-2  | INFO:     172.18.0.6:40906 - "POST /chat HTTP/1.1" 200 OK
+agent-2  | INFO:     172.18.0.6:40906 - "POST /chat HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:35542 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:51080 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:40236 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:52244 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:55654 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:34294 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:60054 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:58094 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:41272 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:35166 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:54420 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:57484 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:52128 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     127.0.0.1:42584 - "GET /health HTTP/1.1" 200 OK
+agent-2  | INFO:     172.18.0.6:49028 - "POST /chat HTTP/1.1" 200 OK
+agent-2  | INFO:     172.18.0.6:49028 - "POST /chat HTTP/1.1" 200 OK
+agent-2  | INFO:     172.18.0.6:49028 - "POST /chat HTTP/1.1" 200 OK
+```
+
+**4. Test Stateless (Ex 5.5):**
+Chạy lệnh `docker compose up --scale agent=3` và `python test_stateless.py`, kết quả cho thấy các request trong cùng một session được phục vụ bởi các instances khác nhau nhưng lịch sử trò chuyện vẫn nhất quán:
+```bash
+❯ python test_stateless.py
+============================================================
+Stateless Scaling Demo
+============================================================
+
+Session ID: fb63959a-60f1-4f14-8181-14ede41e02a5
+
+Request 1: [instance-9f25e6]
+  Q: What is Docker?
+  A: Container là cách đóng gói app để chạy ở mọi nơi. Build once, run anywhere!...
+
+Request 2: [instance-a59fad]
+  Q: Why do we need containers?
+  A: Đây là câu trả lời từ AI agent (mock). Trong production, đây sẽ là response từ O...
+
+Request 3: [instance-62d1d9]
+  Q: What is Kubernetes?
+  A: Đây là câu trả lời từ AI agent (mock). Trong production, đây sẽ là response từ O...
+
+Request 4: [instance-9f25e6]
+  Q: How does load balancing work?
+  A: Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé....
+
+Request 5: [instance-a59fad]
+  Q: What is Redis used for?
+  A: Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận....
+
+------------------------------------------------------------
+Total requests: 5
+Instances used: {'instance-62d1d9', 'instance-a59fad', 'instance-9f25e6'}
+✅ All requests served despite different instances!
+
+--- Conversation History ---
+Total messages: 10
+  [user]: What is Docker?...
+  [assistant]: Container là cách đóng gói app để chạy ở mọi nơi. Build once...
+  [user]: Why do we need containers?...
+  [assistant]: Đây là câu trả lời từ AI agent (mock). Trong production, đây...
+  [user]: What is Kubernetes?...
+  [assistant]: Đây là câu trả lời từ AI agent (mock). Trong production, đây...
+  [user]: How does load balancing work?...
+  [assistant]: Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đ...
+  [user]: What is Redis used for?...
+  [assistant]: Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã đư...
+
+✅ Session history preserved across all instances via Redis!
+```

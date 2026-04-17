@@ -1,100 +1,169 @@
-# Lab 12 — Complete Production Agent
+# Agentic Job Hunter Backend
 
-Kết hợp TẤT CẢ những gì đã học trong 1 project hoàn chỉnh.
+Production-ready FastAPI backend for the Day 12 Agentic Job Hunter lab. The stack uses Redis for stateless session storage, OpenAI as the primary LLM provider with Gemini fallback, API-key authentication, Redis-backed rate limiting, monthly cost controls, structured JSON logging, and Docker deployment behind an Nginx load balancer.
 
-## Checklist Deliverable
+## Architecture
 
-- [x] Dockerfile (multi-stage, < 500 MB)
-- [x] docker-compose.yml (agent + redis)
-- [x] .dockerignore
-- [x] Health check endpoint (`GET /health`)
-- [x] Readiness endpoint (`GET /ready`)
-- [x] API Key authentication
-- [x] Rate limiting
-- [x] Cost guard
-- [x] Config từ environment variables
-- [x] Structured logging
-- [x] Graceful shutdown
-- [x] Public URL ready (Railway / Render config)
+- `app`: FastAPI application replicas serving the API on internal port `8000`
+- `redis`: shared Redis instance for sessions, rate limiting, and budget tracking
+- `nginx`: public reverse proxy and load balancer exposing the service on port `80`
 
----
-
-## Cấu Trúc
-
-```
-06-lab-complete/
-├── app/
-│   ├── main.py         # Entry point — kết hợp tất cả
-│   ├── config.py       # 12-factor config
-│   ├── auth.py         # API Key + JWT
-│   ├── rate_limiter.py # Rate limiting
-│   └── cost_guard.py   # Budget protection
-├── Dockerfile          # Multi-stage, production-ready
-├── docker-compose.yml  # Full stack
-├── railway.toml        # Deploy Railway
-├── render.yaml         # Deploy Render
-├── .env.example        # Template
-├── .dockerignore
-└── requirements.txt
-```
-
----
-
-## Chạy Local
+Nginx routes external traffic to the FastAPI replicas using Docker DNS, so horizontal scaling is done with Docker Compose:
 
 ```bash
-# 1. Setup
+docker compose up --build --scale app=3
+```
+
+## Prerequisites
+
+- Docker Desktop or Docker Engine with Compose v2
+- Valid OpenAI and Gemini API keys
+
+## Configuration
+
+1. Copy the environment template:
+
+```bash
 cp .env.example .env
+```
 
-# 2. Chạy với Docker Compose
-docker compose up
+2. Update `.env` with real secrets:
 
-# 3. Test
+```env
+AGENT_API_KEY=replace-with-a-shared-api-key
+OPENAI_API_KEY=replace-with-openai-api-key
+GEMINI_API_KEY=replace-with-gemini-api-key
+```
+
+Important variables:
+
+- `AGENT_API_KEY`: required on every protected request via the `X-API-Key` header
+- `OPENAI_API_KEY`: primary provider key
+- `GEMINI_API_KEY`: fallback provider key
+- `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW_SECONDS`: per-user request throttling
+- `MONTHLY_BUDGET_USD` and `REQUEST_RESERVE_USD`: monthly cost guard settings
+- `REDIS_URL`: should remain `redis://redis:6379/0` for Docker Compose
+
+## Run With Docker Compose
+
+Start the full stack with one FastAPI replica:
+
+```bash
+docker compose up --build
+```
+
+Start in the background:
+
+```bash
+docker compose up --build -d
+```
+
+Scale the FastAPI service to three replicas behind Nginx:
+
+```bash
+docker compose up --build -d --scale app=3
+```
+
+Stop the stack:
+
+```bash
+docker compose down
+```
+
+View logs:
+
+```bash
+docker compose logs -f nginx
+docker compose logs -f app
+docker compose logs -f redis
+```
+
+## Local Development Without Docker
+
+If you want to run the API directly on your machine, use the existing Conda environment:
+
+```bash
+conda activate vinuni_ai
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+You also need a Redis instance running locally and `REDIS_URL` set to it, for example:
+
+```env
+REDIS_URL=redis://localhost:6379/0
+```
+
+## API Endpoints
+
+- `GET /health`: liveness probe
+- `GET /ready`: readiness probe, including Redis connectivity
+- `POST /session/init`: stores CV and job description for a user session
+- `POST /ask`: asks a question using either general chat mode or stored CV/JD context
+- `POST /chat`: alias route for interactive chat requests
+
+## Example Requests
+
+Health check through Nginx:
+
+```bash
 curl http://localhost/health
-
-# 4. Lấy API key từ .env, test endpoint
-API_KEY=$(grep AGENT_API_KEY .env | cut -d= -f2)
-curl -H "X-API-Key: $API_KEY" \
-     -X POST http://localhost/ask \
-     -H "Content-Type: application/json" \
-     -d '{"question": "What is deployment?"}'
 ```
 
----
-
-## Deploy Railway (< 5 phút)
+Initialize a CV/JD session:
 
 ```bash
-# Cài Railway CLI
-npm i -g @railway/cli
-
-# Login và deploy
-railway login
-railway init
-railway variables set OPENAI_API_KEY=sk-...
-railway variables set AGENT_API_KEY=your-secret-key
-railway up
-
-# Nhận public URL!
-railway domain
+curl -X POST http://localhost/session/init \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $AGENT_API_KEY" \
+  -d '{
+    "user_id": "alice",
+    "cv_text": "Backend engineer with FastAPI, Redis, Docker, and CI/CD experience.",
+    "jd_text": "Hiring a Python backend engineer with production API and container deployment skills."
+  }'
 ```
 
----
-
-## Deploy Render
-
-1. Push repo lên GitHub
-2. Render Dashboard → New → Blueprint
-3. Connect repo → Render đọc `render.yaml`
-4. Set secrets: `OPENAI_API_KEY`, `AGENT_API_KEY`
-5. Deploy → Nhận URL!
-
----
-
-## Kiểm Tra Production Readiness
+Ask a follow-up question:
 
 ```bash
-python check_production_ready.py
+curl -X POST http://localhost/ask \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $AGENT_API_KEY" \
+  -d '{
+    "user_id": "alice",
+    "question": "What should I emphasize in my CV summary?"
+  }'
 ```
 
-Script này kiểm tra tất cả items trong checklist và báo cáo những gì còn thiếu.
+General chat without prior session initialization:
+
+```bash
+curl -X POST http://localhost/ask \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $AGENT_API_KEY" \
+  -d '{
+    "user_id": "guest-user",
+    "question": "How can I tailor my resume for backend roles?"
+  }'
+```
+
+## Deployment Notes
+
+- The FastAPI containers are intentionally not published directly to the host. Only Nginx exposes port `80`.
+- Docker Compose scaling works because the `app` service no longer uses a fixed container name.
+- Nginx balances traffic across `app` replicas using Docker's internal DNS resolver at `127.0.0.11`.
+- Redis is internal-only in the Compose network and is not exposed publicly.
+
+## Troubleshooting
+
+- If port `80` is already in use, stop the conflicting process before starting the stack.
+- If `/ready` returns `503`, inspect Redis and app logs:
+
+```bash
+docker compose logs -f redis
+docker compose logs -f app
+```
+
+- If requests fail with `401`, verify the `X-API-Key` header matches `AGENT_API_KEY`.
+- If requests fail with `429`, the per-user rate limit has been reached.
+- If requests fail with `402`, the monthly budget guard has blocked additional usage.

@@ -1,23 +1,109 @@
-services:
-  - type: web
-    name: ai-agent-production
-    runtime: docker
-    region: singapore
-    plan: starter
-    healthCheckPath: /health
-    autoDeploy: true
+version: "1"
+
+previews:
+  generation: off
+
+envVarGroups:
+  - name: agentic-job-hunter-shared
     envVars:
+      - key: APP_NAME
+        value: Agentic Job Hunter
       - key: ENVIRONMENT
         value: production
-      - key: APP_VERSION
-        value: "1.0.0"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: MODEL_TEMPERATURE
+        value: "0.2"
+      - key: OPENAI_TIMEOUT_SECONDS
+        value: "30"
+      - key: GEMINI_TIMEOUT_SECONDS
+        value: "30"
+      - key: OPENAI_MAX_OUTPUT_TOKENS
+        value: "800"
+      - key: GEMINI_MAX_OUTPUT_TOKENS
+        value: "800"
+      - key: RATE_LIMIT_REQUESTS
+        value: "10"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: MONTHLY_BUDGET_USD
+        value: "10.00"
+      - key: REQUEST_RESERVE_USD
+        value: "0.25"
+      - key: SESSION_TTL_SECONDS
+        value: "604800"
+      - key: HISTORY_MAX_MESSAGES
+        value: "20"
+      - key: GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
+        value: "20"
+      - key: OPENAI_INPUT_PRICE_PER_1K_USD
+        value: "0.00015"
+      - key: OPENAI_OUTPUT_PRICE_PER_1K_USD
+        value: "0.00060"
+      - key: GEMINI_INPUT_PRICE_PER_1K_USD
+        value: "0.00010"
+      - key: GEMINI_OUTPUT_PRICE_PER_1K_USD
+        value: "0.00040"
+
+services:
+  - type: keyvalue
+    name: agentic-job-hunter-redis
+    plan: starter
+    region: oregon
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+  - type: pserv
+    name: agentic-job-hunter-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    region: oregon
+    numInstances: 2
+    autoDeployTrigger: commit
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - fromGroup: agentic-job-hunter-shared
+      - key: PORT
+        value: "8000"
+      - key: REDIS_URL
+        fromService:
+          name: agentic-job-hunter-redis
+          type: keyvalue
+          property: connectionString
+      - key: AGENT_API_KEY
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
-      - key: AGENT_API_KEY
-        generateValue: true
-      - key: JWT_SECRET
-        generateValue: true
-      - key: DAILY_BUDGET_USD
-        value: "5.0"
-      - key: RATE_LIMIT_PER_MINUTE
-        value: "20"
+      - key: GEMINI_API_KEY
+        sync: false
+
+  - type: web
+    name: agentic-job-hunter-proxy
+    runtime: docker
+    dockerfilePath: ./Dockerfile.nginx
+    dockerContext: .
+    plan: starter
+    region: oregon
+    numInstances: 2
+    autoDeployTrigger: commit
+    healthCheckPath: /ready
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: AGENT_UPSTREAM_HOST
+        fromService:
+          name: agentic-job-hunter-app
+          type: pserv
+          envVarKey: RENDER_DISCOVERY_SERVICE
+      - key: AGENT_UPSTREAM_PORT
+        fromService:
+          name: agentic-job-hunter-app
+          type: pserv
+          property: port
